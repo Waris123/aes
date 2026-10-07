@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AES Encryption / Decryption</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:Segoe UI,Arial,sans-serif;background:#f4f6f9;margin:0;padding:20px;color:#222}
+  .wrap{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:1200px;margin:auto}
+  @media(max-width:800px){.wrap{grid-template-columns:1fr}}
+  .card{background:#fff;border:1px solid #dde2ea;border-radius:10px;padding:16px}
+  h2{text-align:center;font-size:16px;margin:0 0 12px}
+  label{display:block;font-weight:600;font-size:13px;margin:12px 0 4px}
+  textarea,input,select{width:100%;padding:8px;border:1px solid #cfd6e0;border-radius:6px;font-size:13px;font-family:inherit}
+  textarea{height:90px;resize:vertical}
+  .row{display:flex;justify-content:space-between;align-items:center}
+  .fmt{display:flex;gap:6px;align-items:center;margin-top:6px;font-size:12px;color:#555}
+  .fmt label.pill{margin:0;font-weight:500;border:1px solid #ccd;border-radius:14px;padding:3px 10px;cursor:pointer}
+  .fmt input{display:none;width:auto}
+  .fmt input:checked+span{color:#4338ca;font-weight:700}
+  .fmt label.pill:has(input:checked){background:#eef0ff;border-color:#99a}
+  .sm{width:auto;padding:4px 10px;background:#fff;color:#0d6efd;border:1px solid #0d6efd;border-radius:5px;cursor:pointer;font-size:12px}
+  .go{width:auto;margin-top:14px;padding:10px 26px;background:#ff6a00;border:0;border-radius:8px;font-weight:700;cursor:pointer}
+  .out{background:#f6f8fa;min-height:80px}
+  .err{color:#c00;font-size:12px;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script>
+const MODES = ['CBC','ECB','CFB','OFB','CTR'];
+const PADS = {PKCS5Padding:'Pkcs7', ZeroPadding:'ZeroPadding', NoPadding:'NoPadding', ISO10126:'Iso10126', ANSIX923:'AnsiX923', ISO97971:'Iso97971'};
+
+function panel(id, enc){
+  const t = enc ? 'Encryption' : 'Decryption';
+  return `
+  <div class="card" id="${id}">
+    <h2>AES ${t}</h2>
+    <label>Cipher Preset</label>
+    <select data-f="cipher"><option>Custom</option><option>AES-256-CBC</option><option>AES-128-CBC</option></select>
+    <label style="font-weight:500"><input type="checkbox" data-f="laravel" style="width:auto"> Laravel payload format (base64 JSON: iv, value, mac)</label>
+    <label>${enc ? 'Enter Plain Text to Encrypt' : 'AES Encrypted Text'}</label>
+    <textarea data-f="input"></textarea>
+
+    <div class="row"><label>${enc ? 'Enter Secret Key' : 'Enter Secret Key used for Encryption'}</label>
+      ${enc ? '<button class="sm" data-gen="key">Generate</button>' : ''}</div>
+    <input data-f="key">
+    ${fmt(id+'k', 'Secret Key Format', ['Plain Text','Base64','Hex'])}
+
+    <label>Select Cipher Mode</label>
+    <select data-f="mode">${MODES.map(m=>`<option>${m}</option>`).join('')}</select>
+
+    <label>Select Padding</label>
+    <select data-f="pad">${Object.keys(PADS).map(p=>`<option>${p}</option>`).join('')}</select>
+
+    <div class="row"><label>${enc ? 'Enter IV (Optional)' : 'Enter IV Used During Encryption (Optional)'}</label>
+      ${enc ? '<button class="sm" data-gen="iv">Generate</button>' : ''}</div>
+    <input data-f="iv">
+    ${fmt(id+'i', 'IV Format', ['Plain Text','Base64','Hex'])}
+
+    <label>Key Size in Bits</label>
+    <select data-f="bits"><option>128</option><option>192</option><option>256</option></select>
+
+    ${fmt(id+'o', 'Output Text Format', enc ? ['Base64','Hex'] : ['Plain-Text','Base64'])}
+
+    <button class="go" data-go>${enc ? 'Encrypt' : 'Decrypt'}</button>
+    <div class="err" data-err></div>
+
+    <div class="row"><label>AES ${enc ? 'Encrypted' : 'Decrypted'} Output</label><button class="sm" data-copy>Copy</button></div>
+    <textarea class="out" data-f="out" readonly></textarea>
+  </div>`;
+}
+function fmt(name, label, opts){
+  return `<div class="fmt">${label}
+    ${opts.map((o,i)=>`<label class="pill"><input type="radio" name="${name}" value="${o}" ${i==0?'checked':''}><span>${o}</span></label>`).join('')}</div>`;
+}
+
+document.getElementById('app').innerHTML = panel('enc', true) + panel('dec', false);
+
+const $ = (root, sel) => root.querySelector(sel);
+const radio = (root, name) => root.querySelector(`input[name="${name}"]:checked`).value;
+
+// parse key/iv into a WordArray of exact byte length (pads with 0 / truncates for plain text)
+function toWA(str, format, bytes){
+  let wa;
+  if (str.startsWith('base64:')) { str = str.slice(7); format = 'Base64'; }
+  if (format === 'Base64') wa = CryptoJS.enc.Base64.parse(str);
+  else if (format === 'Hex') wa = CryptoJS.enc.Hex.parse(str);
+  else wa = CryptoJS.enc.Utf8.parse(str);
+  const hex = CryptoJS.enc.Hex.stringify(wa).padEnd(bytes*2, '0').slice(0, bytes*2);
+  return CryptoJS.enc.Hex.parse(hex);
+}
+
+function opts(root, id){
+  const bytes = +$(root,'[data-f=bits]').value / 8;
+  const key = toWA($(root,'[data-f=key]').value, radio(root,id+'k'), bytes);
+  const mode = $(root,'[data-f=mode]').value;
+  const o = { mode: CryptoJS.mode[mode], padding: CryptoJS.pad[PADS[$(root,'[data-f=pad]').value]] };
+  if (mode !== 'ECB') o.iv = toWA($(root,'[data-f=iv]').value, radio(root,id+'i'), 16);
+  return {key, o};
+}
+
+function randHex(n){ return CryptoJS.lib.WordArray.random(n).toString(CryptoJS.enc.Hex); }
+
+[['enc',true],['dec',false]].forEach(([id, isEnc])=>{
+  const root = document.getElementById(id);
+  const err = $(root,'[data-err]');
+
+  root.querySelectorAll('[data-gen]').forEach(b=>b.onclick=()=>{
+    const isKey = b.dataset.gen === 'key';
+    const bytes = isKey ? +$(root,'[data-f=bits]').value/8 : 16;
+    $(root, isKey ? '[data-f=key]' : '[data-f=iv]').value = randHex(bytes);
+    root.querySelector(`input[name="${id}${isKey?'k':'i'}"][value="Hex"]`).checked = true;
+  });
+
+  $(root,'[data-f=cipher]').onchange = e=>{
+    if (e.target.value === 'Custom') return;
+    $(root,'[data-f=mode]').value = 'CBC';
+    $(root,'[data-f=pad]').value = 'PKCS5Padding';
+    $(root,'[data-f=bits]').value = e.target.value === 'AES-256-CBC' ? '256' : '128';
+  };
+
+  $(root,'[data-copy]').onclick = ()=> navigator.clipboard.writeText($(root,'[data-f=out]').value);
+
+  $(root,'[data-go]').onclick = ()=>{
+    err.textContent = '';
+    try{
+      const {key, o} = opts(root, id);
+      const input = $(root,'[data-f=input]').value;
+      const outFmt = radio(root, id+'o');
+      let result;
+      let lar = $(root,'[data-f=laravel]').checked;
+      if (!isEnc && !lar){
+        try{
+          const j = JSON.parse(atob(input.trim()));
+          if (j.iv && j.value && j.mac){
+            lar = true;
+            $(root,'[data-f=laravel]').checked = true;
+            $(root,'[data-f=cipher]').value = 'AES-256-CBC';
+          }
+        }catch(_){}
+      }
+      const CBC = {mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7};
+      if (lar && isEnc){
+        const iv = CryptoJS.lib.WordArray.random(16);
+        const ivB64 = iv.toString(CryptoJS.enc.Base64);
+        const val = CryptoJS.AES.encrypt(CryptoJS.enc.Utf8.parse(input), key, {iv, ...CBC}).ciphertext.toString(CryptoJS.enc.Base64);
+        const mac = CryptoJS.HmacSHA256(ivB64 + val, key).toString(CryptoJS.enc.Hex);
+        result = btoa(JSON.stringify({iv: ivB64, value: val, mac, tag: ''}));
+      } else if (lar){
+        const p = JSON.parse(atob(input.trim()));
+        const mac = CryptoJS.HmacSHA256(p.iv + p.value, key).toString(CryptoJS.enc.Hex);
+        if (mac !== p.mac) throw new Error('MAC invalid: wrong key or tampered payload.');
+        const pt = CryptoJS.AES.decrypt({ciphertext: CryptoJS.enc.Base64.parse(p.value)}, key, {iv: CryptoJS.enc.Base64.parse(p.iv), ...CBC});
+        result = pt.toString(CryptoJS.enc.Utf8);
+      } else if (isEnc){
+        const ct = CryptoJS.AES.encrypt(CryptoJS.enc.Utf8.parse(input), key, o).ciphertext;
+        result = outFmt === 'Hex' ? ct.toString(CryptoJS.enc.Hex) : ct.toString(CryptoJS.enc.Base64);
+      } else {
+        const clean = input.trim();
+        const ct = /^[0-9a-f]+$/i.test(clean) && clean.length % 2 === 0
+          ? CryptoJS.enc.Hex.parse(clean) : CryptoJS.enc.Base64.parse(clean);
+        const pt = CryptoJS.AES.decrypt({ciphertext: ct}, key, o);
+        result = outFmt === 'Base64' ? pt.toString(CryptoJS.enc.Base64) : pt.toString(CryptoJS.enc.Utf8);
+        if (!result && pt.sigBytes > 0) throw new Error('Malformed UTF-8 result');
+        if (!result && clean) throw new Error('Decryption failed. Check key / IV / mode / padding.');
+      }
+      $(root,'[data-f=out]').value = result;
+    }catch(e){
+      err.textContent = /Malformed UTF-8/.test(e.message)
+        ? 'Decryption failed: check key, IV, mode, padding (or tick Laravel payload format).'
+        : (e.message || 'Error'); $(root,'[data-f=out]').value=''; }
+  };
+});
+</script>
+</body>
+</html>
